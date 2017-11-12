@@ -20,6 +20,8 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   # Two dates, Three Product Information Characters, and One record ID.
 
 # summary(geo.dt)
+  # Warning: Some columns have NA's. Need to determine method to deal with them.
+  # Warning: Some rows have all 0 values. Need to determine method to deal with them.
   # Census data is in counts per block group. 
   # Ages have overlapping categories
   # Classes (num vs int) are mismatched
@@ -41,6 +43,29 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     geo.dt[ , names(geo.dt)[-1] := lapply(.SD,as.numeric), .SDcols = names(geo.dt)[-1]]
 
 #---
+# Clean census data for problematic rows
+#---
+  # Any row with NA values will have issues
+  geo.dt <- na.omit(geo.dt)
+    
+  # If a denominator variable in the next step will be 0, a divide by zero error will occur
+  # Denominator Cols: ACSTTPOP0, ACSMALES, ACSFEMALES, MARSTAT0, RACE0, FMHH0, TOTHH0, 
+  #                   EDUCAT0, HHINCOM0, ACSTOTHU, UNITS0, VALOWNR0, GROSSRNT0
+  geo.dt <- subset(geo.dt, subset = (ACSTTPOP0 != 0 &
+                                         ACSMALES != 0 &
+                                         ACSFEMALES != 0 &
+                                         MARSTAT0 != 0 &
+                                         RACE0 != 0 &
+                                         FMHH0 != 0 &
+                                         TOTHH0 != 0 &
+                                         EDUCAT0 != 0 &
+                                         HHINCOM0 != 0 &
+                                         ACSTOTHU != 0 &
+                                         UNITS0 != 0 &
+                                         VALOWNR0 != 0 &
+                                         GROSSRNT0 != 0))
+    
+#---
 # Convert census variables to percents
 # - This step is performed because each row has its own set of counts and the counts
 #   from one row do not relate to another row. Howewever, percentages of each variable
@@ -48,6 +73,7 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
 #   but if we change that to percents we may end up with 59% males compared to 60% males if
 #   the second number is in a more sparsly populated block group.
 #---
+    
   # Columns 4: 14 are the age count columns
   geo.dt[ , names(geo.dt)[4:14] := .SD / ACSTTPOP0, .SDcols = names(geo.dt)[4:14]] 
     # geo.dt[1:10 , c(4,6:14)]
@@ -75,8 +101,6 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   geo.dt[ , FMHH0 := FMHH0 / TOTHH0]
   geo.dt[ , NOFMHH0 := 1 - FMHH0]
   
-  
-  
   # Columns 40:46 add up to EDUCAT0 column 39
   geo.dt[ , c(40:46) := .SD / EDUCAT0, .SDcols = c(40:46)]
   
@@ -85,9 +109,6 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   
   # ACSTOTHU col 68 is the sum of 69:71
   geo.dt[ , c(69:71) := .SD / ACSTOTHU, .SDcols = c(69:71)]
-  
-  # ACSAVGHHSZ is average household size. Needs to be scaled.
-  geo.dt[ , ACSAVGHHSZ := scale(ACSAVGHHSZ)]
   
   # UNITS0 = 76:81
   geo.dt[ , c(76:81) := .SD / UNITS0, .SDcols = c(76:81)]
@@ -123,22 +144,19 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # # print(unscale(sol.dt$MSRP)[1])
   
   # Scaling geo.dt features
-  # For the variables going into PCA the only reason to scale and use the covariance matrix
-  # is to maintain the difference in counts between households and population.
-    # MEDVALO0 is median value of owner occupied so scale it
-    # geo.dt[ , MEDVALO0 := scale(MEDVALO0)]
-    
-    # AGGVALO0 is avg value of owner occupied so scale it
-    # geo.dt[ , AGGVALO0 := scale(AGGVALO0)]
-    
-    # MDGRSRN0 is median gross rent and needs to be scaled
-    # geo.dt[ , MDGRSRN0 := scale(MDGRSRN0)]
-    
-    # MDYRBLT0 needs to be scaled, median year built
-    # geo.dt[ , MDYRBLT0 := scale(MDYRBLT0)]
-    
-    # Scale land area
-    # geo.dt[ , LANDAREA := scale(LANDAREA)]
+  # The percentages should not be scaled or centered. However, the remaining variables
+  # will then be too large to compare, so we need to adjust them to the same scale.
+    summary(geo.dt)
+    # Variables that have values larger than 1 still:
+    #   LANDAREA, ACSTTPOP0, MARSTAT0, RACE0, TOTHH0, EDUCAT0, HHINCOM0, MEDHHIN0, AGGHHIN0, PCAPIN0
+    #   MDFAMIN0, ACSTOTHU, ACSAVGHHSZ, ACSAVGSZOWN, ACSAVGSZRNT, UNITS0, MDYRBLT0, VALOWNR0, MEDVALO0,
+    #   AGGVALO0, GROSSRNT0, MDGRSRN0
+    scaleVars <- c('LANDAREA', 'ACSTTPOP0', 'MARSTAT0', 'RACE0', 'TOTHH0', 'EDUCAT0', 'HHINCOM0', 'MEDHHIN0', 'AGGHHIN0', 'PCAPIN0',
+                   'MDFAMIN0', 'ACSTOTHU', 'ACSAVGHHSZ', 'ACSAVGSZOWN', 'ACSAVGSZRNT', 'UNITS0', 'MDYRBLT0', 'VALOWNR0', 'MEDVALO0',
+                   'AGGVALO0', 'GROSSRNT0', 'MDGRSRN0')
+    geo.dt[ , (scaleVars) := lapply(.SD,scale), .SDcols = scaleVars]
+    rm(scaleVars)
+    summary(geo.dt)
 
 #---
 # Selecting variables for PCA from the Census data
@@ -146,13 +164,53 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
 #   used to calculate %Female = 1-%Male. No new information is added by including both. 
 #--- 
   # Exclude ACSAGE17Y0, but include the 0-4, 5-9, 10-14, 15-19 data which has the same basic information.
-  # Exclude ACSFEMALE, because the same information is included in ACSMALES
-  # Exclude MARSTAT0 because the variable only tells how many of the population are 15 or older, and that
-  #      information is already included in the total population and the age groupings
-  # Exclude RACE0 because it is the population variable over again (with possible adjustments for unknown)
-  # Exclude EDUCAT0 because it is only the population 25 or older. 
-  # Exclude HHINCOM0 because it is the same informatio as TOTHH0.
-  # 
+  # Exclude ACSFEMALES, because the same information is included in ACSMALES
+  # Consider whether to Exclude MARSTAT0 because the variable only tells how many of the population are 15 or older, and that
+  #      information is already included in the total population and the age groupings. Will this skew PCA?
+  # Consider whether to Exclude EDUCAT0 because it is only the population 25 or older. This information is already captured. Will this skew PCA?
+  # RecordNumber is an ID value and not part of the PCA.
+
+  # Subset will be: geo.dt[,c(2:4,6:15,17:101)]
+  
+#---
+# Cleaning rows with errors
+#---
+  # Easiest way to clean missing data is to find rows with errors and remove/subset them
+  summary(geo.dt)
+  
+  # Something in my functions is creating NA values...So let's remove them before PCA
+  geo.dt <- na.omit(geo.dt)
+  
+#---
+# Peform the PCA
+#---
+  geo.pca <- prcomp(geo.dt[,c(2:4,6:15,17:101)], center = FALSE, scale. = FALSE)
+  # geo.pca <- prcomp(na.omit(geo.dt[,c(2:4,6:15,17:101)]), center = TRUE, scale. = TRUE)
+
+  # Review the results
+  summary(geo.pca)
+    # Results are fairly reasonable. PC1 to PC11 have more than 1% of the variance each, and PC1 has 33.4% of the variance
+    # By PC5, 79% of the variation is included. By PC9, 91% of the variation is included. By PC11, 95% ". By PC28, 99%.
+  plot(geo.pca, type="l")
+    # Plot shows a pivot point at PC5
+  
+  
+  # Now using only variables in percent form.
+  percentonly.pca <- prcomp(geo.dt[,c(4,6:15,18:21,23:31,33:38,40:46,48:63,69:71,76:81,84:90,94:100)], center = FALSE, scale. = FALSE)
+  summary(percentonly.pca)
+    # PC1 to PC5 have more than 1% each. PC1 has a whopping 80.76%.
+  plot(percentonly.pca, type="l")
+    # Plot shows a pivot point at PC2 and maybe again at PC5.
+
+#---
+# Combine the PCA output to the remaining data
+#---
+  pcaFactors.dt <- cbind(geo.dt[,"RecordNumber"],geo.pca$x)
+  
+  # Only keep RecordName and PC1 to PC5
+  pcaFactors.dt[,c(7:length(names(pcaFactors.dt))) := NULL]
+  
+  # Combine the PCA factors to the sol.dt dataset
   
   
 print(paste("Took",Sys.time()-start_time,"seconds to complete."))
