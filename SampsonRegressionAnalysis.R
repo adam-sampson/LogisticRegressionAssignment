@@ -10,6 +10,8 @@ library(data.table)
 library(lubridate)
 source("Functions.R")
 
+options(scipen = 999)
+
 start_time <- Sys.time()
 
 sol.dt <- fread("MarketingCampaignSolicitations.txt",sep="\t",header=TRUE)
@@ -202,10 +204,13 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # Results are fairly reasonable. PC1 to PC11 have more than 1% of the variance each, and PC1 has 33.4% of the variance
     # By PC5, 79% of the variation is included. By PC9, 91% of the variation is included. By PC11, 95% ". By PC28, 99%.
   plot(geo.pca, type="l")
+  abline(h = 1, col="red")
     # Plot shows a pivot point at PC5
-  # Estimate eigenvalues 
+  # Estimate eigenvalues by variance
   geo.pca$sdev^2
-    # This estimate shows PC1 to PC5 have eigenvalues of > 1, so keep PC1 to PC5
+    # This estimate shows PC1 to PC5 have variance of > 1, so keep PC1 to PC5
+  View(geo.pca$rotation[,1:5])
+  # biplot(geo.pca, scale = 0)
   
   # Now using only variables in percent form.
   percentonly.pca <- prcomp(geo.dt[,c(4,6:15,18:21,23:31,33:38,40:46,48:63,69:71,76:81,84:90,94:100)], center = FALSE, scale. = FALSE)
@@ -213,7 +218,10 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # PC1 to PC5 have more than 1% each. PC1 has a whopping 80.76%.
   plot(percentonly.pca, type="l")
     # Plot shows a pivot point at PC2 and maybe again at PC5.
-
+  # Estimate eigenvalues by variances
+  percentonly.pca$sdev^2
+    # This estimate shows only PC1 has variances of > 1, so the model above may have much more info.
+  
 #---
 # Combine the PCA output to the remaining data
 #---
@@ -273,16 +281,16 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   #   PD Walloven, PD Washer Top Load, PD Wine Cooler
   
   # Before trying more complex methods, review model without Product Detail (only product Group)
-  logit.mod <- glm(isPurchase ~ Brand + ProductGroup + MSRP + OfferPrice + PC1 + PC2 + PC3 + PC4 + PC5,
+  logit.mod2 <- glm(isPurchase ~ Brand + ProductGroup + MSRP + OfferPrice + PC1 + PC2 + PC3 + PC4 + PC5,
                    data=train.dt, family = binomial(link="logit"))
-  summary(logit.mod)
+  summary(logit.mod2)
   # Check the odds ratios
-  data.frame(OddsRatio = exp(coef(logit.mod)))
+  data.frame(OddsRatio = exp(coef(logit.mod2)))
   # confint(logit.mod)
   # exp(cbind(OddsRatio = coef(logit.mod), confint(logit.mod)))
   
   # Get fitted results for train.dt
-  fitted.results <- predict(logit.mod,newdata = train.dt,type='response')
+  fitted.results <- predict(logit.mod2,newdata = train.dt,type='response')
   fitted.df <- data.frame(prediction = fitted.results,
                                predValue = ifelse(fitted.results > 0.5, 1, 0),
                                trueValue = as.numeric(train.dt$isPurchase))
@@ -321,12 +329,12 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # Review the results
     summary(fitted.df)
   
-    # RMSE
-    rmse(fitted.df$trueValue, fitted.df$predValue)
-    # MAE
-    mae(fitted.df$trueValue, fitted.df$predValue)
-    # Mis-classifier
-    (misClasifyError <- mean(fitted.df$predValue != fitted.df$trueValue))
+    # # RMSE
+    # rmse(fitted.df$trueValue, fitted.df$predValue)
+    # # MAE
+    # mae(fitted.df$trueValue, fitted.df$predValue)
+    # # Mis-classifier
+    # (misClasifyError <- mean(fitted.df$predValue != fitted.df$trueValue))
     
     # Review the ROCR performance
     pr <- prediction(fitted.results, test.dt$isPurchase)
