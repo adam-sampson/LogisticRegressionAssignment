@@ -12,3 +12,12 @@ unscale <- function(in.vec) {
   
 }
 
+rmse <- function(trueVec,predVec) {
+  error <- trueVec - predVec
+  return(sqrt(mean(error^2)))
+}
+
+mae <- function(trueVec,predVec) {
+  error <- trueVec - predVec
+  return(mean(abs(error)))
+}

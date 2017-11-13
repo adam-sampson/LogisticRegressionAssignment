@@ -4,6 +4,8 @@
 # Student: Adam Sampson
 ##########
 
+library(dplyr)
+library(ROCR)
 library(data.table)
 library(lubridate)
 source("Functions.R")
@@ -34,6 +36,8 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     dateVars <- c("MailDate","PurchaseDate")
     sol.dt[ , (dateVars) := lapply(.SD,parse_date_time,c('ymd HMS')), .SDcols = dateVars]
     rm(dateVars)
+    
+    sol.dt[ , RecordNumber:= as.character(RecordNumber)]
 
   # Convert for geo.dt
     # Convert RecordNumber to character in census data
@@ -42,6 +46,12 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # Convert all numbers in census data to num and not a mix of num and int
     geo.dt[ , names(geo.dt)[-1] := lapply(.SD,as.numeric), .SDcols = names(geo.dt)[-1]]
 
+#---
+# Calculate more useful values from dates in sol.dt
+#---
+  sol.dt[,isPurchase := !is.na(PurchaseDate)]
+  sol.dt[,daysToPurchase := as.numeric(as_date(PurchaseDate) - as_date(MailDate))]
+    
 #---
 # Clean census data for problematic rows
 #---
@@ -193,7 +203,9 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # By PC5, 79% of the variation is included. By PC9, 91% of the variation is included. By PC11, 95% ". By PC28, 99%.
   plot(geo.pca, type="l")
     # Plot shows a pivot point at PC5
-  
+  # Estimate eigenvalues 
+  geo.pca$sdev^2
+    # This estimate shows PC1 to PC5 have eigenvalues of > 1, so keep PC1 to PC5
   
   # Now using only variables in percent form.
   percentonly.pca <- prcomp(geo.dt[,c(4,6:15,18:21,23:31,33:38,40:46,48:63,69:71,76:81,84:90,94:100)], center = FALSE, scale. = FALSE)
@@ -211,6 +223,125 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   pcaFactors.dt[,c(7:length(names(pcaFactors.dt))) := NULL]
   
   # Combine the PCA factors to the sol.dt dataset
+  setkey(sol.dt,RecordNumber)
+  setkey(pcaFactors.dt,RecordNumber)
+  analyVars <- merge(sol.dt,pcaFactors.dt,all=FALSE)
+  setkey(sol.dt,NULL)
+  setkey(pcaFactors.dt,NULL)
   
+  summary(analyVars)
+    # There are many NA values in PurchaseData and daysToPurchase. but not going to use these anyway.
   
+  # Check variables we are going to use for NA values
+  analyVars <- na.omit(analyVars, 
+                       cols = c("Brand", "MSRP", "ProductGroup", "ProductDetail", "OfferPrice", 
+                                "isPurchase","PC1","PC2","PC3","PC4","PC5"))
+    
+#---
+# Prepare variables for regression
+#---
+  # Review the classes before performing analysis
+  # OfferPrice is essentially categorical (only 2 options)
+  analyVars$OfferPrice <- factor(analyVars$OfferPrice)
+  analyVars$Brand <- factor(analyVars$Brand)
+  analyVars$ProductGroup <- factor(analyVars$ProductGroup)
+  analyVars$ProductDetail <- factor(analyVars$ProductDetail)
+
+  # Set the levels so that a good variable is the default
+  # Brand Average Brand A is ok.
+  # Product Group Air Conditioner isn't ideal, Washer is more common
+  analyVars$ProductGroup <- relevel(analyVars$ProductGroup, ref = "Washer")
+  
+#---
+# Split data into test set and training set
+#---
+  # use 80% (randomly selected) of the rows in analyVars for training data
+  set.seed(42)
+  train.dt <- copy(sample_n(analyVars,0.8 * length(analyVars[[1]])))
+  test.dt <- anti_join(analyVars,train.dt)
+  
+#---
+# Run first logistic model
+#---
+  logit.mod <- glm(isPurchase ~ Brand + ProductGroup + ProductDetail + MSRP + OfferPrice + PC1 + PC2 + PC3 + PC4 + PC5,
+                   data=train.dt, family = binomial(link="logit"))
+  (logit.mod)
+  summary(logit.mod)
+  # First thing to note is that 14 of the inputs are not defined because of singularities.
+  #   PD Compactor, PD Dishwasher, PD Dryer Gas, PD Gas Cooktop, PD Ice Maker, PD Over the Range Microwave
+  #   PD Range Hood, PD Refer Unknown, PD Slide in Range Gas, PD Stacked Laundry, PD Upright Freezer,
+  #   PD Walloven, PD Washer Top Load, PD Wine Cooler
+  
+  # Before trying more complex methods, review model without Product Detail (only product Group)
+  logit.mod <- glm(isPurchase ~ Brand + ProductGroup + MSRP + OfferPrice + PC1 + PC2 + PC3 + PC4 + PC5,
+                   data=train.dt, family = binomial(link="logit"))
+  summary(logit.mod)
+  # Check the odds ratios
+  data.frame(OddsRatio = exp(coef(logit.mod)))
+  # confint(logit.mod)
+  # exp(cbind(OddsRatio = coef(logit.mod), confint(logit.mod)))
+  
+  # Get fitted results for train.dt
+  fitted.results <- predict(logit.mod,newdata = train.dt,type='response')
+  fitted.df <- data.frame(prediction = fitted.results,
+                               predValue = ifelse(fitted.results > 0.5, 1, 0),
+                               trueValue = as.numeric(train.dt$isPurchase))
+    # Review the results
+    summary(fitted.df)
+    
+    # # RMSE
+    # rmse(fitted.df$trueValue, fitted.df$predValue)
+    # # MAE
+    # mae(fitted.df$trueValue, fitted.df$predValue)
+    # # Mis-classifier
+    # (misClasifyError <- mean(fitted.df$predValue != fitted.df$trueValue))
+  
+    # Review the ROCR performance
+    pr <- prediction(fitted.results, train.dt$isPurchase)
+    prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+    plot(prf)
+    
+    auc <- performance(pr, measure = "auc")
+    auc <- auc@y.values[[1]]
+    auc
+    
+    # Review the lift
+    lift.perf <- performance(pr,"lift","rpp")
+      # Subsample because that is a lot of data points
+      lift.perf@x.values$num <- sample(lift.perf@x.values$num,length(lift.perf@x.values)/100,replace = FALSE)
+      lift.perf@y.values$num <- sample(lift.perf@y.values$num,length(lift.perf@y.values)/100,replace = FALSE)
+    plot(lift.perf, main="Lift Curve", ylim=c(0,5))
+    abline(h = 1, col = "red")
+    
+  # Get fitted results for test.dt
+  fitted.results <- predict(logit.mod,newdata = test.dt,type='response')
+  fitted.df <- data.frame(prediction = fitted.results,
+                               predValue = ifelse(fitted.results > 0.5, 1, 0),
+                               trueValue = as.numeric(test.dt$isPurchase))
+    # Review the results
+    summary(fitted.df)
+  
+    # RMSE
+    rmse(fitted.df$trueValue, fitted.df$predValue)
+    # MAE
+    mae(fitted.df$trueValue, fitted.df$predValue)
+    # Mis-classifier
+    (misClasifyError <- mean(fitted.df$predValue != fitted.df$trueValue))
+    
+    # Review the ROCR performance
+    pr <- prediction(fitted.results, test.dt$isPurchase)
+    prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+    plot(prf)
+    auc <- performance(pr, measure = "auc")
+    auc <- auc@y.values[[1]]
+    auc
+    
+    # Review the lift
+    lift.perf <- performance(pr,"lift","rpp")
+      # Subsample because that is a lot of data points
+      lift.perf@x.values$num <- sample(lift.perf@x.values$num,length(lift.perf@x.values)/100,replace = FALSE)
+      lift.perf@y.values$num <- sample(lift.perf@y.values$num,length(lift.perf@y.values)/100,replace = FALSE)
+    plot(lift.perf, main="Lift Curve", ylim=c(0,5))
+    abline(h = 1, col = "red")
+    
 print(paste("Took",Sys.time()-start_time,"seconds to complete."))
