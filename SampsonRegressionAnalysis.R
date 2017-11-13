@@ -23,6 +23,10 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   # OfferPrice from 60 to 70
   # Two dates, Three Product Information Characters, and One record ID.
 
+# What percent of mailers end up with a customer buying a service contract?
+  length(sol.dt[is.na(PurchaseDate)==FALSE,PurchaseDate]) / length(sol.dt[is.na(MailDate)==FALSE,MailDate])
+  # 3.04% end up in a service contract.
+
 # summary(geo.dt)
   # Warning: Some columns have NA's. Need to determine method to deal with them.
   # Warning: Some rows have all 0 values. Need to determine method to deal with them.
@@ -210,8 +214,22 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   geo.pca$sdev^2
     # This estimate shows PC1 to PC5 have variance of > 1, so keep PC1 to PC5
   View(geo.pca$rotation[,1:5])
-  # biplot(geo.pca, scale = 0)
-  
+  # Create a summary of the most critical items on the set
+    PCA.values <- geo.pca$rotation[,1:5]
+    PCA.values <- cbind(row.names(PCA.values),PCA.values)
+    PCA.values <- as.data.frame(PCA.values, stringsAsFactors = FALSE)
+      PCA.values <- PCA.values %>% mutate(PC1 = as.numeric(PC1),
+                                          PC2 = as.numeric(PC2),
+                                          PC3 = as.numeric(PC3),
+                                          PC4 = as.numeric(PC4),
+                                          PC5 = as.numeric(PC5))
+      PC1 <- PCA.values %>% arrange(desc(abs(PC1))) %>% select(V1 = V1,PC1) %>% head(n=10L)
+      PC2 <- PCA.values %>% arrange(desc(abs(PC2))) %>% select(V2 = V1,PC2) %>% head(n=10L)
+      PC3 <- PCA.values %>% arrange(desc(abs(PC3))) %>% select(V3 = V1,PC3) %>% head(n=10L)
+      PC4 <- PCA.values %>% arrange(desc(abs(PC4))) %>% select(V4 = V1,PC4) %>% head(n=10L)
+      PC5 <- PCA.values %>% arrange(desc(abs(PC5))) %>% select(V5 = V1,PC5) %>% head(n=10L)
+      PCtable <- cbind(PC1,PC2,PC3,PC4,PC5)
+      
   # Now using only variables in percent form.
   percentonly.pca <- prcomp(geo.dt[,c(4,6:15,18:21,23:31,33:38,40:46,48:63,69:71,76:81,84:90,94:100)], center = FALSE, scale. = FALSE)
   summary(percentonly.pca)
@@ -220,7 +238,7 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # Plot shows a pivot point at PC2 and maybe again at PC5.
   # Estimate eigenvalues by variances
   percentonly.pca$sdev^2
-    # This estimate shows only PC1 has variances of > 1, so the model above may have much more info.
+    # This estimate shows only PC1 has variances of > 1, so the geo.pca model above may have much more info.
   
 #---
 # Combine the PCA output to the remaining data
@@ -229,7 +247,7 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
   
   # Only keep RecordName and PC1 to PC5
   pcaFactors.dt[,c(7:length(names(pcaFactors.dt))) := NULL]
-  
+    
   # Combine the PCA factors to the sol.dt dataset
   setkey(sol.dt,RecordNumber)
   setkey(pcaFactors.dt,RecordNumber)
@@ -285,7 +303,10 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
                    data=train.dt, family = binomial(link="logit"))
   summary(logit.mod2)
   # Check the odds ratios
-  data.frame(OddsRatio = exp(coef(logit.mod2)))
+  mod2.oddsratio <- data.frame(OddsRatio = exp(coef(logit.mod2)))
+  mod2.oddsratio <- mod2.oddsratio %>% mutate(Name = row.names(mod2.oddsratio)) %>% select(Name,OddsRatio)
+  mod2.oddsratio <- arrange(mod2.oddsratio, desc(OddsRatio))
+  mod2.oddsratio <- mod2.oddsratio %>% mutate(diff = OddsRatio - 1)
   # confint(logit.mod)
   # exp(cbind(OddsRatio = coef(logit.mod), confint(logit.mod)))
   
@@ -339,7 +360,10 @@ geokey.dt <- fread("GeoKey.txt",sep="\t",header=FALSE)
     # Review the ROCR performance
     pr <- prediction(fitted.results, test.dt$isPurchase)
     prf <- performance(pr, measure = "tpr", x.measure = "fpr")
-    plot(prf)
+    plot(prf, main="ROC Curve")
+    abline(a=0,b=1,col="red")
+    
+    #Review Area Under the Curve
     auc <- performance(pr, measure = "auc")
     auc <- auc@y.values[[1]]
     auc
